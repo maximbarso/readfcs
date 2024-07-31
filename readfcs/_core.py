@@ -1,6 +1,7 @@
 import re
 from pathlib import Path
 from typing import Dict, Union
+import logging
 
 import anndata as ad
 import fcsparser
@@ -114,20 +115,19 @@ class ReadFCS:
         # compensation matrix
         self.spill_txt = None
         self.spill = None
-        if "SPILL" in self.meta:
-            self._meta["spill"] = self._meta.pop("SPILL")
-        if "SPILLOVER" in self.meta:
-            self._meta["spillover"] = self._meta.pop("SPILLOVER")
 
-        spill_list = [
-            self.meta.get(key)
-            for key in ["spill", "spillover"]
-            if self.meta.get(key) is not None
-        ]
-        if len(spill_list) > 0:
-            self.spill_txt = spill_list[0]
-            if len(self.spill_txt) > 0:  # type:ignore
-                self._meta["spill"] = _get_spill_matrix(self.spill_txt)  # type:ignore
+        spill_kws = ["SPILL", "SPILLOVER", "$SPILLOVER"]
+        spill_kws_in_meta = [key in self.meta for key in spill_kws]
+        spill_kws_found = [kw for kw, found in zip(spill_kws, spill_kws_in_meta) if found]
+
+        if len(spill_kws_found) > 0:
+            if len(spill_kws_found) > 1:
+                logging.warning(
+                    f"Multiple spill keywords found in metadata: {spill_kws_found}."
+                    f"Only the {spill_kws_found[0]} keyword will be used."
+                )
+            self.spill_txt = self.meta.get(spill_kws_found[0])
+            self._meta["spill"] = _get_spill_matrix(self.spill_txt)
 
     @property
     def header(self) -> dict:
