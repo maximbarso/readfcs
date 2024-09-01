@@ -118,7 +118,9 @@ class ReadFCS:
 
         spill_kws = ["SPILL", "SPILLOVER", "$SPILLOVER"]
         spill_kws_in_meta = [key in self.meta for key in spill_kws]
-        spill_kws_found = [kw for kw, found in zip(spill_kws, spill_kws_in_meta) if found]
+        spill_kws_found = [
+            kw for kw, found in zip(spill_kws, spill_kws_in_meta) if found
+        ]
 
         if len(spill_kws_found) > 0:
             if len(spill_kws_found) > 1:
@@ -149,22 +151,55 @@ class ReadFCS:
         assert (
             self.meta["spill"] is not None
         ), f"Unable to locate spillover matrix, please provide a compensation matrix"  # noqa
-        channel_idx = [
-            i
-            for i, (idx, row) in enumerate(self._meta["channels"].iterrows())
-            if row["$PnS"] not in ["", " "]
-        ]
 
         channel_idx = [
             i
             for i, (idx, row) in enumerate(self._meta["channels"].iterrows())
-            if all([z not in row["$PnN"].lower() for z in ["fsc", "ssc", "time"]])
-            and row["$PnN"] in self.meta["spill"].columns  # noqa
+            if row["$PnN"] in self.meta["spill"].columns # noqa
         ]
 
         comp_data = self.data.iloc[:, channel_idx]
         comp_data = np.linalg.solve(self.meta["spill"].values.T, comp_data.T).T
         self._data[self._data.columns[channel_idx]] = comp_data
+        self.is_compensated = True
+
+    def normalize(self) -> None:
+        channels = self.meta["channels"]
+        filtered_channels = channels[~channels["$PnN"].isin(["time", "Time", "TIME"])]
+        pnr = filtered_channels["$PnR"].values.astype(int)
+        assert np.all(pnr == pnr[0])
+        pnr = pnr[0]
+        assert pnr in [1024, 2**18]
+        self._data = np.clip(self.data / (pnr - 1), 0, 1)
+        self.is_normalized = True
+
+    def logtransform(
+        self,
+        epsilon=1e-5,
+        non_marker_strs=[
+            "FS",
+            "SS",
+            "TIME",
+        ],
+    ) -> None:
+        assert self.is_normalized, "Data must be normalized before log-transforming"
+        cols = self.meta["channels"]["$PnN"].values
+        assert all(cols == self.data.columns)
+        marker_cols = np.logical_not(
+            [
+                np.any([s.upper().startswith(nms) for nms in non_marker_strs])
+                for s in cols
+            ]
+        )
+        logging.info(
+            f"LOG TRANSFORMING:\n{' '.join(cols[marker_cols].tolist())}\n"
+            f"NOT LOG TRANSFORMING:\n{' '.join(cols[~marker_cols].tolist())}"
+        )
+        x = self.data.iloc[:, marker_cols]
+        self._data.iloc[:, marker_cols] = (np.log(x + epsilon) - np.log(epsilon)) / (
+            np.log(1 + epsilon) - np.log(epsilon)
+        )
+        self.is_logtransformed = True
 
     def to_anndata(self, reindex=True) -> ad.AnnData:
         """Convert the FCSFile instance to an AnnData.
